@@ -42,6 +42,8 @@
  */
 
 #include "lwip/opt.h"
+#include "lwip/pbuf.h"
+#include "lwip/tcp.h"
 
 #if LWIP_TCP /* don't build if not configured for use in lwipopts.h */
 
@@ -398,7 +400,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
     return;
   }
 #endif
-  if (pcb != NULL) {
+  if (pcb != NULL)  {
     /* The incoming segment belongs to a connection. */
 #if TCP_INPUT_DEBUG
     tcp_debug_print_state(pcb->state);
@@ -570,6 +572,22 @@ aborted:
       inseg.p = NULL;
     }
   } else {
+    if (flags & TCP_SYN) {
+      if (inp->has_new_tcp_connection_fn) {
+        const ip_addr_t *dest_addr = ip_current_dest_addr();
+        const ip_addr_t *src_addr = ip_current_src_addr();
+
+        struct tcp_pcb_listen* pcb_from_handler = (struct tcp_pcb_listen*)inp->has_new_tcp_connection_fn(inp, tcphdr, dest_addr, src_addr);
+
+        if (pcb_from_handler) {
+          tcp_listen_input(pcb_from_handler);
+          pbuf_free(p);
+          return;
+          // Put this connection into listen state then feed it this SYN packet
+        }
+      }
+    }
+
     /* If no matching PCB was found, send a TCP RST (reset) to the
        sender. */
     LWIP_DEBUGF(TCP_RST_DEBUG, ("tcp_input: no PCB match found, resetting.\n"));

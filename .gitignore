@@ -5,7 +5,10 @@
 *lwip_unittests.xml
 *.suo
 *.log
+.cache/
+.DS_Store
 .depend*
+cmake-build-debug
 
 /.vscode/ipch
 

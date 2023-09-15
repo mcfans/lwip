@@ -153,6 +153,7 @@ enum lwip_internal_netif_client_data_index
 #endif /* LWIP_CHECKSUM_CTRL_PER_NETIF */
 
 struct netif;
+struct tcp_hdr;
 
 /** MAC Filter Actions, these are passed to a netif's igmp_mac_filter or
  * mld_mac_filter callback function. */
@@ -192,6 +193,10 @@ typedef err_t (*netif_input_fn)(struct pbuf *p, struct netif *inp);
 typedef err_t (*netif_output_fn)(struct netif *netif, struct pbuf *p,
        const ip4_addr_t *ipaddr);
 #endif /* LWIP_IPV4*/
+
+// #if TUN_DEVICE
+typedef struct tcp_pcb* (*netif_has_new_tcp_connection_fn)(struct netif *netif, struct tcp_hdr *tcp_hdr, const ip_addr_t *dst_ip, const ip_addr_t *src_ip);
+// #endif /* TUN_DEVICE */
 
 #if LWIP_IPV6
 /** Function prototype for netif->output_ip6 functions. Called by lwIP when a packet
@@ -361,6 +366,7 @@ struct netif {
   /** is this netif enabled for IPv6 autoconfiguration */
   u8_t ip6_autoconfig_enabled;
 #endif /* LWIP_IPV6_AUTOCONFIG */
+  netif_has_new_tcp_connection_fn has_new_tcp_connection_fn;
 #if LWIP_IPV6_SEND_ROUTER_SOLICIT
   /** Number of Router Solicitation messages that remain to be sent. */
   u8_t rs_count;

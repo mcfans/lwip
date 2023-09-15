@@ -3,8 +3,11 @@
 #include "lwip/priv/tcp_priv.h"
 #include "lwip/stats.h"
 #include "lwip/inet.h"
+#include "lwip/tun.h"
 #include "tcp_helper.h"
 #include "lwip/inet_chksum.h"
+#include <assert.h>
+#include <stdio.h>
 
 #ifdef _MSC_VER
 #pragma warning(disable: 4307) /* we explicitly wrap around TCP seqnos */
@@ -153,6 +156,72 @@ START_TEST(test_tcp_listen_passive_open)
   }
 
   tcp_close(pcbl);
+}
+END_TEST
+
+struct tcp_pcb_acceptor {
+    struct tcp_pcb *pcb;
+};
+
+err_t tun_device_tcp_accept_test(void *arg, struct tcp_pcb *newpcb, err_t err) {
+  struct tcp_pcb_acceptor *acceptor = (struct tcp_pcb_acceptor *)arg;
+  acceptor->pcb = newpcb;
+  return ERR_OK;
+}
+
+err_t test_tun_passive_listen_recv_num(void *arg, struct tcp_pcb *pcb, struct pbuf *p, err_t err) {
+  int *data = (int *)p->payload;
+  EXPECT(*data == 23);
+  tcp_recved(pcb, p->tot_len);
+  pbuf_free(p);
+    
+  return ERR_OK;
+}
+
+START_TEST(test_tcp_tun_passive_listen)
+{
+  struct netif* netif;
+  struct pbuf *p;
+  tun_new_connection_callback_t callback;
+  struct tcp_pcb_acceptor acceptor;
+  ip_addr_t src_addr;
+
+  memset(&acceptor, 0, sizeof(acceptor));
+
+  callback.fn = tun_device_tcp_accept_test;
+  callback.arg = &acceptor;
+
+  tun_init();
+
+  netif = tun_netif_new(ip_addr_get_ip4_u32(&test_local_ip), ip_addr_get_ip4_u32(&test_netmask), 0, &callback);
+
+  netif_list = netif;
+
+  ip_addr_set_ip4_u32_val(src_addr, lwip_htonl(lwip_ntohl(ip_addr_get_ip4_u32(&netif->ip_addr)) + 1));
+  /* check correct syn packet */
+  p = tcp_create_segment(&src_addr, &netif->ip_addr, 12345,
+                         2345, NULL, 0, 12345, 0, TCP_SYN);
+  EXPECT(p != NULL);
+  if (p != NULL) {
+    /* pass the segment to tcp_input */
+    test_tcp_input(p, netif);
+      
+    p = tcp_create_segment(&src_addr, &netif->ip_addr, 12345,
+                           2345, NULL, 0, 2, 6511, TCP_ACK);
+      
+    test_tcp_input(p, netif);
+
+    EXPECT(acceptor.pcb != NULL);
+    tcp_recv(acceptor.pcb, test_tun_passive_listen_recv_num);
+      
+    int i = 23;
+    p = tcp_create_segment(&src_addr, &netif->ip_addr, 12345,
+                           2345, (void *)&i, sizeof(i), 12346, 6510, 0);
+    test_tcp_input(p, netif);
+  }
+  EXPECT(acceptor.pcb != NULL);
+  tcp_close(acceptor.pcb);
+  mem_free(netif);
 }
 END_TEST
 
@@ -525,7 +594,7 @@ START_TEST(test_tcp_fast_retx_recover)
   EXPECT_RET(pcb->dupacks == 3);
   memset(&txcounters, 0, sizeof(txcounters));
   /* @todo: check expected data?*/
-  
+
   /* send data5, not output yet */
   err = tcp_write(pcb, data5, sizeof(data5), TCP_WRITE_FLAG_COPY);
   EXPECT_RET(err == ERR_OK);
@@ -1268,7 +1337,7 @@ static void test_tcp_rto_timeout_impl(int link_down)
   /* check our pcb is no longer active */
   for (cur = tcp_active_pcbs; cur != NULL; cur = cur->next) {
     EXPECT(cur != pcb);
-  }  
+  }
   EXPECT_RET(MEMP_STATS_GET(used, MEMP_TCP_PCB) == 0);
 }
 
@@ -1364,7 +1433,7 @@ static void test_tcp_rto_timeout_syn_sent_impl(int link_down)
   /* check our pcb is no longer active */
   for (cur = tcp_active_pcbs; cur != NULL; cur = cur->next) {
     EXPECT(cur != pcb);
-  }  
+  }
   EXPECT_RET(MEMP_STATS_GET(used, MEMP_TCP_PCB) == 0);
 }
 
@@ -1414,7 +1483,7 @@ static void test_tcp_zwp_timeout_impl(int link_down)
   EXPECT(err == ERR_OK);
   err = tcp_output(pcb);
   EXPECT(err == ERR_OK);
-  
+
   /* verify segment is in-flight */
   EXPECT(pcb->unsent == NULL);
   check_seqnos(pcb->unacked, 1, seqnos);
@@ -1493,7 +1562,7 @@ static void test_tcp_zwp_timeout_impl(int link_down)
   /* check our pcb is no longer active */
   for (cur = tcp_active_pcbs; cur != NULL; cur = cur->next) {
     EXPECT(cur != pcb);
-  }  
+  }
   EXPECT_RET(MEMP_STATS_GET(used, MEMP_TCP_PCB) == 0);
 }
 
@@ -1676,6 +1745,7 @@ tcp_suite(void)
   testfunc tests[] = {
     TESTFUNC(test_tcp_new_abort),
     TESTFUNC(test_tcp_listen_passive_open),
+    TESTFUNC(test_tcp_tun_passive_listen),
     TESTFUNC(test_tcp_recv_inseq),
     TESTFUNC(test_tcp_recv_inseq_trim),
     TESTFUNC(test_tcp_passive_close),

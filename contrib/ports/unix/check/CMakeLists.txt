@@ -12,6 +12,7 @@ set(LWIP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../..)
 if (NOT CMAKE_SYSTEM_NAME STREQUAL "GNU")
     set(LWIP_USE_SANITIZERS true)
 endif()
+#set(LWIP_USE_SANITIZERS true)
 include(${LWIP_DIR}/contrib/ports/CMakeCommon.cmake)
 
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
@@ -23,6 +24,7 @@ set (LWIP_DEFINITIONS -DLWIP_DEBUG -DLWIP_NOASSERT_ON_ERROR)
 set (LWIP_INCLUDE_DIRS
     "${LWIP_DIR}/test/unit"
     "${LWIP_DIR}/src/include"
+    "/opt/homebrew/include"
     "${LWIP_CONTRIB_DIR}/"
     "${LWIP_CONTRIB_DIR}/ports/unix/port/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/"
