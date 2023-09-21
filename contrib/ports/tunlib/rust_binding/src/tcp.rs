@@ -25,7 +25,7 @@ unsafe impl Sync for TcpConnection {}
 
 struct RecvCallback {
     waker: Option<Waker>,
-    unread: Vec<Vec<u8>>,
+    unread: Vec<u8>,
     met_eof: bool,
 }
 
@@ -56,6 +56,7 @@ extern "C" fn recv_function(
     p: *mut pbuf,
     err: err_t,
 ) -> err_t {
+    println!("Recv called");
     if err != err_enum_t_ERR_OK as err_t {
         return err;
     }
@@ -69,10 +70,12 @@ extern "C" fn recv_function(
 
     let pbuf = PBuf { pbuf: p };
 
-    callback.unread.push(pbuf.data().to_vec());
+    callback.unread.extend_from_slice(pbuf.data());
 
     if let Some(waker) = callback.waker.take() {
         waker.wake();
+    } else {
+        println!("Not waking");
     }
 
     return err_enum_t_ERR_OK as err_t;
@@ -120,6 +123,7 @@ impl AsyncRead for TcpConnection {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
+        println!("Poll read");
         if self.recv_callback.unread.is_empty() {
             if self.recv_callback.met_eof {
                 return Poll::Ready(Ok(()));
@@ -130,11 +134,19 @@ impl AsyncRead for TcpConnection {
         } else {
             let mut_self = self.get_mut();
 
-            let range = 0..mut_self.recv_callback.unread.len();
+            let read_size;
+            if buf.remaining() < mut_self.recv_callback.unread.len() {
+                read_size = buf.remaining();
+            } else {
+                read_size = mut_self.recv_callback.unread.len();
+            }
 
-            for data in mut_self.recv_callback.unread.drain(range) {
-                println!("Read data {}", std::str::from_utf8(&data).unwrap());
-                buf.put_slice(&data);
+            {
+                let sent_data = mut_self.recv_callback.unread.drain(..read_size);
+
+                buf.put_slice(sent_data.as_slice());
+
+                println!("Read data from tcp tun {:?}", std::str::from_utf8(buf.filled()));
             }
 
             if mut_self.recv_callback.met_eof {

@@ -18,11 +18,16 @@ impl tun::tun::Pipe for TcpHandler {
             let mut tun_conn = conn;
 
             let socket = tokio::net::TcpSocket::new_v4().unwrap();
+            // 198.19.249.150
+            // socket.bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 19, 249, 150), 0))).unwrap();
+            // let socket.connect(dst).await
             let fd = socket.as_raw_fd();
             let res = unsafe { bind_eth0(fd) };
             if res != 0 {
                 println!("Bind failed with error {}", res);
             }
+            // 198.19.249.150
+            socket.bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 19, 249, 150), 0))).unwrap();
             let outbound_conn = socket.connect(dst).await;
 
             if let Err(e) = outbound_conn {
@@ -45,19 +50,18 @@ fn main() {
         .unwrap();
 
     runtime.block_on(async {
-        // let socket = tokio::net::TcpSocket::new_v4().unwrap();
-        // let fd = socket.as_raw_fd();
-        // // let res = unsafe { bind_eth0(fd) };
-        // let res = 0;
-        // if res != 0 {
-        //     println!("Bind failed with error {}", res);
-        // }
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        let fd = socket.as_raw_fd();
+        let res = unsafe { bind_eth0(fd) };
+        if res != 0 {
+            println!("Bind failed with error {}", res);
+        }
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(45, 79, 112, 203), 4242));
-        // let mut outbound_conn = socket.connect().await.unwrap();
+        let mut outbound_conn = socket.connect(addr).await.unwrap();
 
-        let mut outbound_conn = tokio::net::TcpStream::connect(addr).await.unwrap();
+        // let mut outbound_conn = tokio::net::TcpStream::connect(addr).await.unwrap();
 
-        let size = outbound_conn.write(b"Hello world").await.unwrap();
+        let size = outbound_conn.write(b"Hello world\n").await.unwrap();
 
         println!("Writed {size}");
 
@@ -94,7 +98,7 @@ fn main() {
     loop {
         let mut buf = [0u8; 1504];
         let len = file.read(&mut buf).unwrap();
-        // println!("Read {} bytes from tun", len);
+        println!("Read {} bytes from tun", len);
         tun.input_data(&buf[0..len]);
     }
 }

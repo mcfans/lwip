@@ -157,7 +157,7 @@ impl TunNetif {
             let pbuf_wrapper = PtrWrapper(pbuf);
             let netif_wrapper = PtrWrapper(self.netif);
 
-            (*self.context).pool.spawn(|| {
+            (*self.context).pool.install(|| {
                 let netif_wrapper = netif_wrapper;
                 let pbuf_wrapper = pbuf_wrapper;
 
