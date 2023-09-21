@@ -574,30 +574,31 @@ ip4_input(struct pbuf *p, struct netif *inp)
   } else {
     /* start trying with inp. if that's not acceptable, start walking the
        list of configured netifs. */
-    if (ip4_input_accept(inp)) {
-      netif = inp;
-    } else {
-      netif = NULL;
-#if !LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF
-      /* Packets sent to the loopback address must not be accepted on an
-       * interface that does not have the loopback address assigned to it,
-       * unless a non-loopback interface is used for loopback traffic. */
-      if (!ip4_addr_isloopback(ip4_current_dest_addr()))
-#endif /* !LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF */
-      {
-#if !LWIP_SINGLE_NETIF
-        NETIF_FOREACH(netif) {
-          if (netif == inp) {
-            /* we checked that before already */
-            continue;
-          }
-          if (ip4_input_accept(netif)) {
-            break;
-          }
-        }
-#endif /* !LWIP_SINGLE_NETIF */
-      }
-    }
+    netif = inp;
+//     if (ip4_input_accept(inp)) {
+//       netif = inp;
+//     } else {
+//       netif = NULL;
+// #if !LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF
+//       /* Packets sent to the loopback address must not be accepted on an
+//        * interface that does not have the loopback address assigned to it,
+//        * unless a non-loopback interface is used for loopback traffic. */
+//       if (!ip4_addr_isloopback(ip4_current_dest_addr()))
+// #endif /* !LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF */
+//       {
+// #if !LWIP_SINGLE_NETIF
+//         NETIF_FOREACH(netif) {
+//           if (netif == inp) {
+//             /* we checked that before already */
+//             continue;
+//           }
+//           if (ip4_input_accept(netif)) {
+//             break;
+//           }
+//         }
+// #endif /* !LWIP_SINGLE_NETIF */
+//       }
+//     }
   }
 
 #if IP_ACCEPT_LINK_LAYER_ADDRESSING

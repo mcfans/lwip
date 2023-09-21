@@ -174,7 +174,7 @@ err_t test_tun_passive_listen_recv_num(void *arg, struct tcp_pcb *pcb, struct pb
   EXPECT(*data == 23);
   tcp_recved(pcb, p->tot_len);
   pbuf_free(p);
-    
+
   return ERR_OK;
 }
 
@@ -182,7 +182,7 @@ START_TEST(test_tcp_tun_passive_listen)
 {
   struct netif* netif;
   struct pbuf *p;
-  tun_new_connection_callback_t callback;
+  tun_device_callback_t callback;
   struct tcp_pcb_acceptor acceptor;
   ip_addr_t src_addr;
 
@@ -205,15 +205,15 @@ START_TEST(test_tcp_tun_passive_listen)
   if (p != NULL) {
     /* pass the segment to tcp_input */
     test_tcp_input(p, netif);
-      
+
     p = tcp_create_segment(&src_addr, &netif->ip_addr, 12345,
                            2345, NULL, 0, 2, 6511, TCP_ACK);
-      
+
     test_tcp_input(p, netif);
 
     EXPECT(acceptor.pcb != NULL);
     tcp_recv(acceptor.pcb, test_tun_passive_listen_recv_num);
-      
+
     int i = 23;
     p = tcp_create_segment(&src_addr, &netif->ip_addr, 12345,
                            2345, (void *)&i, sizeof(i), 12346, 6510, 0);

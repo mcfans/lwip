@@ -23,7 +23,7 @@ set(lwipcontribtun_SRCS
     ${LWIP_CONTRIB_DIR}/ports/tunlib/sys_arch.c
 )
 
-add_library(lwip ${lwipcore_SRCS} ${lwipcontribtun_SRCS})
+add_library(lwip ${lwipnoapps_SRCS} ${lwipcontribtun_SRCS})
 
 target_compile_options(lwip PRIVATE ${LWIP_COMPILER_FLAGS})
 target_compile_definitions(lwip PRIVATE ${LWIP_DEFINITIONS} ${LWIP_MBEDTLS_DEFINITIONS})

@@ -1,13 +1,13 @@
 [package]
-name = "tun"
+name = "linux_tun_example"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tokio = { version = "1.32.0", features = ["io-util"] }
-rayon = "1.7"
+tokio = { version = "1.11.0", features = ["rt", "net", "rt-multi-thread"] }
+tun = { path = "../" }
 
 [build-dependencies]
-bindgen = "0.65.1"
+cc = { version = "1.0", features = ["parallel"] }

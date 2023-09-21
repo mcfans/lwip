@@ -15,6 +15,17 @@ fn sdk_path(sdk: &str) -> String {
 }
 
 fn main() {
+  let path = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+
+  let cmake_output = PathBuf::new()
+    .join(path)
+    .parent()
+    .unwrap()
+    .join("build");
+
+  println!("cargo:rustc-link-search=native={}", cmake_output.display());
+  println!("cargo:rustc-link-lib=static=lwip");
+
   println!("cargo:rustc-rerun-if-changed=wrapper.h");
 
   let mut builder = bindgen::Builder::default()
@@ -25,6 +36,7 @@ fn main() {
     .clang_arg("-I..")
     .clang_arg("-I/usr/include")
     .clang_arg("-I../../../../src/include")
+    .allowlist_file(".*lwip.*")
     // Tell cargo to invalidate the built crate whenever any of the
     // included header files changed.
     .parse_callbacks(Box::new(bindgen::CargoCallbacks));
