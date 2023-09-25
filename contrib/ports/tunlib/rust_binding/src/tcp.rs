@@ -1,6 +1,6 @@
 use crate::lwip_binding::{
     err_enum_t_ERR_OK, err_t, pbuf, pbuf_free, tcp_arg, tcp_close, tcp_output, tcp_pcb, tcp_recv,
-    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_BUF, err_enum_t_ERR_USE, err_enum_t_ERR_ALREADY, err_enum_t_ERR_ABRT, err_enum_t_ERR_CLSD, err_enum_t_ERR_RST, err_enum_t_ERR_ARG, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING,
+    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_BUF, err_enum_t_ERR_USE, err_enum_t_ERR_ALREADY, err_enum_t_ERR_ABRT, err_enum_t_ERR_CLSD, err_enum_t_ERR_RST, err_enum_t_ERR_ARG, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved,
 };
 use crate::tun::PtrWrapper;
 use core::task::{Context, Poll};
@@ -53,7 +53,7 @@ impl Drop for PBuf {
 
 extern "C" fn recv_function(
     arg: *mut std::os::raw::c_void,
-    _: *mut tcp_pcb,
+    pcb: *mut tcp_pcb,
     p: *mut pbuf,
     err: err_t,
 ) -> err_t {
@@ -66,12 +66,15 @@ extern "C" fn recv_function(
 
     if p.is_null() {
         callback.met_eof = true;
+        unsafe { tcp_recved(pcb, 0) };
         return err_enum_t_ERR_OK as err_t;
     }
 
     let pbuf = PBuf { pbuf: p };
 
-    callback.unread.extend_from_slice(pbuf.data());
+    let pbuf_data = pbuf.data();
+
+    callback.unread.extend_from_slice(pbuf_data);
 
     if let Some(waker) = callback.recv_waker.take() {
         waker.wake();
@@ -79,6 +82,7 @@ extern "C" fn recv_function(
         println!("Not waking");
     }
 
+    unsafe { tcp_recved(pcb, pbuf_data.len() as u16) };
     return err_enum_t_ERR_OK as err_t;
 }
 
@@ -140,24 +144,31 @@ impl TcpConnection {
 
 impl AsyncRead for TcpConnection {
     fn poll_read(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         println!("Poll read");
+
+        {
+            self.as_mut().callback.recv_waker = Some(cx.waker().clone());
+        }
+
         if self.callback.unread.is_empty() {
             if self.callback.met_eof {
                 return Poll::Ready(Ok(()));
             }
 
-            self.get_mut().callback.recv_waker = Some(cx.waker().clone());
             return Poll::Pending;
         } else {
             let mut_self = self.get_mut();
 
+            let mut need_call_waker_again = false;
+
             let read_size;
             if buf.remaining() < mut_self.callback.unread.len() {
                 read_size = buf.remaining();
+                need_call_waker_again = true;
             } else {
                 read_size = mut_self.callback.unread.len();
             }
@@ -167,10 +178,14 @@ impl AsyncRead for TcpConnection {
 
                 buf.put_slice(sent_data.as_slice());
 
-                println!("Read data from tcp tun {:?}", std::str::from_utf8(buf.filled()));
+                println!("Read data from tcp tun {}", read_size);
             }
 
             if mut_self.callback.met_eof {
+                need_call_waker_again = true;
+            }
+
+            if need_call_waker_again {
                 cx.waker().wake_by_ref();
             }
             return Poll::Ready(Ok(()));
