@@ -41,6 +41,7 @@
  *
  */
 
+#include "lwip/debug.h"
 #include "lwip/opt.h"
 #include "lwip/pbuf.h"
 #include "lwip/tcp.h"
@@ -367,6 +368,7 @@ tcp_input(struct pbuf *p, struct netif *inp)
         ((struct tcp_pcb_listen *)prev)->next = lpcb->next;
         /* our successor is the remainder of the listening list */
         lpcb->next = tcp_listen_pcbs.listen_pcbs;
+        LWIP_ASSERT("tcp_input: pcb->next != pcb (after cache)", lpcb->next != lpcb);
         /* put this listening pcb at the head of the listening list */
         tcp_listen_pcbs.listen_pcbs = lpcb;
       } else {
@@ -577,6 +579,8 @@ aborted:
         const ip_addr_t *dest_addr = ip_current_dest_addr();
         const ip_addr_t *src_addr = ip_current_src_addr();
 
+        LWIP_ASSERT("TCP Header should only has SYN", flags == TCP_SYN);
+
         struct tcp_pcb_listen* pcb_from_handler = (struct tcp_pcb_listen*)inp->has_new_tcp_connection_fn(inp, tcphdr, dest_addr, src_addr);
 
         if (pcb_from_handler) {
@@ -675,6 +679,11 @@ tcp_listen_input(struct tcp_pcb_listen *pcb)
     }
 #endif /* TCP_LISTEN_BACKLOG */
     npcb = tcp_alloc(pcb->prio);
+    LWIP_ASSERT("HI there", npcb != tcp_active_pcbs);
+    // if (npcb == tcp_active_pcbs) {
+    //   LWIP
+
+    // }
     /* If a new PCB could not be created (probably due to lack of memory),
        we don't do anything, but rely on the sender will retransmit the
        SYN at a time when we have more memory available. */

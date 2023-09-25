@@ -1,4 +1,6 @@
 use std::{fs::File, os::fd::{FromRawFd, AsRawFd}, net::{Ipv4Addr, SocketAddr, SocketAddrV4}, io::{Read, Write}};
+use log::debug;
+use simplelog::{SimpleLogger, LevelFilter, Config};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use tun::tun::TunNetif;
 
@@ -23,9 +25,9 @@ impl tun::tun::Pipe for TcpHandler {
             // let socket.connect(dst).await
             let fd = socket.as_raw_fd();
             let res = unsafe { bind_eth0(fd) };
-            if res != 0 {
-                println!("Bind failed with error {}", res);
-            }
+            // if res != 0 {
+            //     println!("Bind failed with error {}", res);
+            // }
             // 198.19.249.150
             socket.bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 19, 249, 150), 0))).unwrap();
             let outbound_conn = socket.connect(dst).await;
@@ -37,6 +39,36 @@ impl tun::tun::Pipe for TcpHandler {
             let mut outbound_conn = outbound_conn.unwrap();
             println!("Connected to {}", dst);
 
+            // let mut first_read_buf = [0u8; 15040];
+
+            // let Ok(size) = tun_conn.read(&mut first_read_buf).await else {
+            //     return
+            // };
+
+            // debug!("first read size: {} sending: {:?}", size, std::str::from_utf8(&first_read_buf[..size]));
+
+            // let Ok(size) = outbound_conn.write(&first_read_buf[..size]).await else {
+            //     return
+            // };
+
+            // debug!("first outgoing size: {}", size);
+
+            // first_read_buf.fill(0);
+
+            // let Ok(size) = outbound_conn.read(&mut first_read_buf).await else {
+            //     return
+            // };
+
+            // debug!("first back size: {} string: {:?}", size, std::str::from_utf8(&first_read_buf[..size]));
+
+            // let Ok(size) = tun_conn.write(&first_read_buf[..size]).await else {
+            //     return
+            // };
+
+            // debug!("first back to conn size: {}", size);
+
+            println!("Starting bidirectional copy");
+
             let res = tokio::io::copy_bidirectional(&mut tun_conn, &mut outbound_conn).await;
             println!("Connection to {} closed: {:?}", dst, res)
         });
@@ -44,33 +76,14 @@ impl tun::tun::Pipe for TcpHandler {
 }
 
 fn main() {
+
+    let _ = SimpleLogger::init(LevelFilter::Trace, Config::default());
+    debug!("HHH");
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
-
-    runtime.block_on(async {
-        let socket = tokio::net::TcpSocket::new_v4().unwrap();
-        let fd = socket.as_raw_fd();
-        let res = unsafe { bind_eth0(fd) };
-        if res != 0 {
-            println!("Bind failed with error {}", res);
-        }
-        let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(45, 79, 112, 203), 4242));
-        let mut outbound_conn = socket.connect(addr).await.unwrap();
-
-        // let mut outbound_conn = tokio::net::TcpStream::connect(addr).await.unwrap();
-
-        let size = outbound_conn.write(b"Hello world\n").await.unwrap();
-
-        println!("Writed {size}");
-
-        let mut buf = [0u8; 11];
-        
-        outbound_conn.read(&mut buf).await.unwrap();
-
-        println!("Read {}", std::str::from_utf8(&buf).unwrap());
-    });
 
     let fd = unsafe { tun_open() };
     let mut file = unsafe { 
@@ -81,12 +94,12 @@ fn main() {
     let gateway = Ipv4Addr::new(192, 18, 0, 1);
     let handler = TcpHandler { handle: runtime.handle().clone() };
 
-    let mut tun = TunNetif::new(ip, netmask, gateway, Box::new(handler));
+    let mut tun = TunNetif::new(runtime.handle().clone(), ip, netmask, gateway, Box::new(handler));
 
     println!("Opened tun device with fd {}", fd);
 
     tun.set_output_fn(Box::new(move |data| {
-        // println!("Writing {} bytes to tun", data.len());
+        println!("Writing {} bytes to tun", data.len());
         let mut file = unsafe { File::from_raw_fd(fd) };
         let res = file.write_all(data);
         if let Err(e) = res {

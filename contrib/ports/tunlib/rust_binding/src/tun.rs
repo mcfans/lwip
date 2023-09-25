@@ -90,6 +90,7 @@ unsafe impl<T> Sync for PtrWrapper<T> {}
 
 impl TunNetif {
     pub fn new(
+        handle: tokio::runtime::Handle,
         ip_addr: Ipv4Addr,
         net_mask: Ipv4Addr,
         gateway: Ipv4Addr,
@@ -140,6 +141,18 @@ impl TunNetif {
                     addr_boxed_callback,
                 );
                 PtrWrapper(ptr)
+            });
+
+            let cloned_pool = arc_pool.clone();
+
+            handle.spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+                loop {
+                    interval.tick().await;
+                    cloned_pool.install(|| {
+                        crate::lwip_binding::sys_check_timeouts();
+                    })
+                }
             });
 
             TunNetif {

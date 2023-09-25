@@ -23,8 +23,6 @@ fn main() {
     .unwrap()
     .join("build");
 
-  println!("cargo:rustc-link-search=native={}", cmake_output.display());
-  println!("cargo:rustc-link-lib=static=lwip");
 
   println!("cargo:rustc-rerun-if-changed=wrapper.h");
 
@@ -40,6 +38,11 @@ fn main() {
     // Tell cargo to invalidate the built crate whenever any of the
     // included header files changed.
     .parse_callbacks(Box::new(bindgen::CargoCallbacks));
+
+  if cfg!(target_os = "linux") {
+    println!("cargo:rustc-link-search=native={}", cmake_output.display());
+    println!("cargo:rustc-link-lib=static=lwip");
+  }
 
   if cfg!(target_os = "macos") {
     let sdk = "macosx";

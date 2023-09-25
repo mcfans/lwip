@@ -2,3 +2,4 @@
 #include "lwip/init.h"
 #include "lwip/netif.h"
 #include "lwip/pbuf.h"
+#include "lwip/timeouts.h"

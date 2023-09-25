@@ -60,6 +60,7 @@
  *
  */
 
+#include "lwip/debug.h"
 #include "lwip/opt.h"
 
 #if LWIP_TCP /* don't build if not configured for use in lwipopts.h */
@@ -783,8 +784,8 @@ tcp_write(struct tcp_pcb *pcb, const void *arg, u16_t len, u8_t apiflags)
   pcb->snd_buf -= len;
   pcb->snd_queuelen = queuelen;
 
-  LWIP_DEBUGF(TCP_QLEN_DEBUG, ("tcp_write: %"S16_F" (after enqueued)\n",
-                               pcb->snd_queuelen));
+  LWIP_DEBUGF(TCP_QLEN_DEBUG, ("tcp_write: %"S16_F" (after enqueued) snd_buf len %"S16_F" (after enqueued) len %"S16_F" (after enqueued) \n",
+                               pcb->snd_queuelen, pcb->snd_buf, len));
   if (pcb->snd_queuelen != 0) {
     LWIP_ASSERT("tcp_write: valid queue length",
                 pcb->unacked != NULL || pcb->unsent != NULL);
@@ -1255,6 +1256,8 @@ tcp_output(struct tcp_pcb *pcb)
   LWIP_ASSERT("don't call tcp_output for listen-pcbs",
               pcb->state != LISTEN);
 
+  LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output \n"));
+
   /* First, check if we are invoked by the TCP input processing
      code. If so, we do not output anything. Instead, we rely on the
      input processing code to call us when input processing is done
@@ -1295,6 +1298,7 @@ tcp_output(struct tcp_pcb *pcb)
   if (netif == NULL) {
     return ERR_RTE;
   }
+  LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output got here after route \n"));
 
   /* If we don't have a local IP address, we get one from netif */
   if (ip_addr_isany(&pcb->local_ip)) {
@@ -1322,6 +1326,7 @@ tcp_output(struct tcp_pcb *pcb)
     if (pcb->flags & TF_ACK_NOW) {
       return tcp_send_empty_ack(pcb);
     }
+    LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output goto output done \n"));
     goto output_done;
   }
   /* Stop persist timer, above conditions are not active */
@@ -1332,6 +1337,7 @@ tcp_output(struct tcp_pcb *pcb)
   if (useg != NULL) {
     for (; useg->next != NULL; useg = useg->next);
   }
+  LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output got here \n"));
   /* data available and window allows it to be sent? */
   while (seg != NULL &&
          lwip_ntohl(seg->tcphdr->seqno) - pcb->lastack + seg->len <= wnd) {
@@ -1469,6 +1475,7 @@ tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb, struct netif *netif
   LWIP_ASSERT("tcp_output_segment: invalid pcb", pcb != NULL);
   LWIP_ASSERT("tcp_output_segment: invalid netif", netif != NULL);
 
+  LWIP_DEBUGF(TCP_OUTPUT_DEBUG, ("tcp_output_segment \n"));
   if (tcp_output_segment_busy(seg)) {
     /* This should not happen: rexmit functions should have checked this.
        However, since this function modifies p->len, we must not continue in this case. */
@@ -2036,7 +2043,7 @@ tcp_rst(const struct tcp_pcb *pcb, u32_t seqno, u32_t ackno,
         u16_t local_port, u16_t remote_port)
 {
   struct pbuf *p;
-  
+
   p = tcp_rst_common(pcb, seqno, ackno, local_ip, remote_ip, local_port, remote_port);
   if (p != NULL) {
     tcp_output_control_segment(pcb, p, local_ip, remote_ip);

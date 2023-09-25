@@ -214,6 +214,7 @@ tcp_free(struct tcp_pcb *pcb)
   tcp_ext_arg_invoke_callbacks_destroyed(pcb->ext_args);
 #endif
   memp_free(MEMP_TCP_PCB, pcb);
+  LWIP_ASSERT("TCP freeed but still in active", tcp_active_pcbs != pcb);
 }
 
 /** Free a tcp listen pcb */
@@ -225,6 +226,7 @@ tcp_free_listen(struct tcp_pcb *pcb)
   tcp_ext_arg_invoke_callbacks_destroyed(pcb->ext_args);
 #endif
   memp_free(MEMP_TCP_PCB_LISTEN, pcb);
+  LWIP_ASSERT("TCP freeed but still in active", tcp_active_pcbs != pcb);
 }
 
 /**
@@ -1842,6 +1844,8 @@ tcp_alloc(u8_t prio)
   LWIP_ASSERT_CORE_LOCKED();
 
   pcb = (struct tcp_pcb *)memp_malloc(MEMP_TCP_PCB);
+  LWIP_ASSERT("PCB Should not in active list", pcb != (tcp_active_pcbs));
+
   if (pcb == NULL) {
     /* Try to send FIN for all pcbs stuck in TF_CLOSEPEND first */
     tcp_handle_closepend();
