@@ -1,6 +1,6 @@
 use crate::lwip_binding::{
     err_enum_t_ERR_OK, err_t, pbuf, pbuf_free, tcp_arg, tcp_close, tcp_output, tcp_pcb, tcp_recv,
-    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_BUF, err_enum_t_ERR_USE, err_enum_t_ERR_ALREADY, err_enum_t_ERR_ABRT, err_enum_t_ERR_CLSD, err_enum_t_ERR_RST, err_enum_t_ERR_ARG,
+    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_BUF, err_enum_t_ERR_USE, err_enum_t_ERR_ALREADY, err_enum_t_ERR_ABRT, err_enum_t_ERR_CLSD, err_enum_t_ERR_RST, err_enum_t_ERR_ARG, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING,
 };
 use crate::tun::PtrWrapper;
 use core::task::{Context, Poll};
@@ -261,23 +261,31 @@ impl AsyncWrite for TcpConnection {
     }
 }
 
-// impl Drop for TcpConnection {
-//     fn drop(&mut self) {
-//         unsafe {
-//             if !self.pcb_closed {
-//                 println!("tcp drop");
+impl Drop for TcpConnection {
+    fn drop(&mut self) {
+        unsafe {
+            println!("tcp drop");
 
-//                 let pcb_wrapper = PtrWrapper(self.pcb);
+            let pcb_wrapper = PtrWrapper(self.pcb);
 
-//                 self.pool.install(|| {
-//                     let pcb_wrapper = pcb_wrapper;
+            self.pool.install(|| {
+                let pcb_wrapper = pcb_wrapper;
 
-//                     tcp_close(pcb_wrapper.0)
-//                 });
-//             }
-//         }
-//     }
-// }
+                let state = (*pcb_wrapper.0).state;
+
+                match state {
+                    tcp_state_CLOSED | tcp_state_CLOSE_WAIT | tcp_state_CLOSING => {
+                        return;
+                    }
+                    _ => {
+                        tcp_close(pcb_wrapper.0);
+                        return;
+                    }
+                }
+            });
+        }
+    }
+}
 
 fn match_error_to_rust_error_kind(err: err_t) -> Option<std::io::ErrorKind> {
     let err = err as i32;
