@@ -1,9 +1,10 @@
 use crate::lwip_binding::{
     err_enum_t_ERR_OK, err_t, pbuf, pbuf_free, tcp_arg, tcp_close, tcp_output, tcp_pcb, tcp_recv,
-    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_BUF, err_enum_t_ERR_USE, err_enum_t_ERR_ALREADY, err_enum_t_ERR_ABRT, err_enum_t_ERR_CLSD, err_enum_t_ERR_RST, err_enum_t_ERR_ARG, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved,
+    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_BUF, err_enum_t_ERR_USE, err_enum_t_ERR_ALREADY, err_enum_t_ERR_ABRT, err_enum_t_ERR_CLSD, err_enum_t_ERR_RST, err_enum_t_ERR_ARG, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved, tcp_sent, tcp_abort,
 };
 use crate::tun::PtrWrapper;
 use core::task::{Context, Poll};
+use std::sync::Mutex;
 use rayon::ThreadPool;
 use std::ffi::c_void;
 use std::pin::Pin;
@@ -26,7 +27,7 @@ unsafe impl Sync for TcpConnection {}
 struct Callback {
     recv_waker: Option<Waker>,
     write_waker: Option<Waker>,
-    unread: Vec<u8>,
+    unread: Mutex<Vec<u8>>,
     met_eof: bool,
 }
 
@@ -57,7 +58,7 @@ extern "C" fn recv_function(
     p: *mut pbuf,
     err: err_t,
 ) -> err_t {
-    println!("Recv called");
+    // println!("Recv called time {:?}", std::time::Instant::now());
     if err != err_enum_t_ERR_OK as err_t {
         return err;
     }
@@ -74,12 +75,15 @@ extern "C" fn recv_function(
 
     let pbuf_data = pbuf.data();
 
-    callback.unread.extend_from_slice(pbuf_data);
+    {
+        let mut locked = callback.unread.lock().unwrap();
+        locked.extend_from_slice(pbuf_data);
+    }
 
     if let Some(waker) = callback.recv_waker.take() {
         waker.wake();
     } else {
-        println!("Not waking");
+        // println!("Not waking");
     }
 
     unsafe { tcp_recved(pcb, pbuf_data.len() as u16) };
@@ -90,14 +94,31 @@ extern "C" fn poll_function(
     arg: *mut std::os::raw::c_void,
     _: *mut tcp_pcb,
 ) -> err_t {
-    println!("Poll called");
     let callback = arg as *mut Callback;
     let callback = unsafe { &mut *callback };
 
     if let Some(waker) = callback.write_waker.take() {
         waker.wake();
     } else {
-        println!("Polling without waker");
+        // println!("Polling without waker");
+    }
+
+    return err_enum_t_ERR_OK as err_t;
+}
+
+extern "C" fn sent_function(
+    arg: *mut std::os::raw::c_void,
+    _: *mut tcp_pcb,
+    _: u16
+) -> err_t {
+    // println!("Sent called");
+    let callback = arg as *mut Callback;
+    let callback = unsafe { &mut *callback };
+
+    if let Some(waker) = callback.write_waker.take() {
+        waker.wake();
+    } else {
+        // println!("Calling Sent without waker");
     }
 
     return err_enum_t_ERR_OK as err_t;
@@ -108,7 +129,7 @@ impl TcpConnection {
         let callback = Callback {
             recv_waker: None,
             write_waker: None,
-            unread: Vec::new(),
+            unread: Mutex::new(Vec::new()),
             met_eof: false,
         };
         let mut pinned = Box::pin(callback);
@@ -128,6 +149,7 @@ impl TcpConnection {
                 tcp_arg(pcb, ptr as *mut c_void);
 
                 tcp_poll(pcb, Some(poll_function), 1);
+                tcp_sent(pcb, Some(sent_function));
 
                 tcp_recv(pcb, Some(recv_function))
             }
@@ -148,40 +170,41 @@ impl AsyncRead for TcpConnection {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        println!("Poll read");
+        // println!("Poll read");
 
         {
             self.as_mut().callback.recv_waker = Some(cx.waker().clone());
         }
 
-        if self.callback.unread.is_empty() {
+        let mut locked = self.callback.unread.lock().unwrap();
+
+        if locked.is_empty() {
             if self.callback.met_eof {
                 return Poll::Ready(Ok(()));
             }
 
             return Poll::Pending;
         } else {
-            let mut_self = self.get_mut();
 
             let mut need_call_waker_again = false;
 
             let read_size;
-            if buf.remaining() < mut_self.callback.unread.len() {
+            if buf.remaining() < locked.len() {
                 read_size = buf.remaining();
                 need_call_waker_again = true;
             } else {
-                read_size = mut_self.callback.unread.len();
+                read_size = locked.len();
             }
 
             {
-                let sent_data = mut_self.callback.unread.drain(..read_size);
+                let sent_data = locked.drain(..read_size);
 
                 buf.put_slice(sent_data.as_slice());
 
-                println!("Read data from tcp tun {}", read_size);
+                // println!("Read data from tcp tun {} {:?}", read_size, std::time::Instant::now());
             }
 
-            if mut_self.callback.met_eof {
+            if self.callback.met_eof {
                 need_call_waker_again = true;
             }
 
@@ -195,7 +218,7 @@ impl AsyncRead for TcpConnection {
 
 impl AsyncWrite for TcpConnection {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
-        println!("Poll write len {}", buf.len());
+        // println!("Poll write len {}", buf.len());
         let pcb_wrapper = PtrWrapper(self.pcb);
         self.as_mut().callback.write_waker = Some(cx.waker().clone());
 
@@ -204,7 +227,7 @@ impl AsyncWrite for TcpConnection {
         let result = pool.install(|| unsafe {
             let pcb_wrapper = pcb_wrapper;
 
-            let mut err_t = tcp_write(
+            let err_t = tcp_write(
                 pcb_wrapper.0,
                 buf.as_ptr() as *const c_void,
                 buf.len() as u16,

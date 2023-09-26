@@ -99,7 +99,7 @@ fn main() {
     println!("Opened tun device with fd {}", fd);
 
     tun.set_output_fn(Box::new(move |data| {
-        println!("Writing {} bytes to tun", data.len());
+        // println!("Writing {} bytes to tun", data.len());
         let mut file = unsafe { File::from_raw_fd(fd) };
         let res = file.write_all(data);
         if let Err(e) = res {
@@ -109,9 +109,12 @@ fn main() {
     }));
 
     loop {
+        // let time = std::time::Instant::now();
         let mut buf = [0u8; 1504];
         let len = file.read(&mut buf).unwrap();
-        println!("Read {} bytes from tun", len);
+        // println!("Read {} bytes from tun", len);
         tun.input_data(&buf[0..len]);
+        // let duration = time.elapsed();
+        // println!("Time elapsed is: {:?} speed: {}", duration, (len as f64 / duration.as_secs_f64()) / 1024f64);
     }
 }

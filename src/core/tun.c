@@ -49,6 +49,7 @@ err_t tun_netif_init(struct netif *netif) {
   netif_set_link_up(netif);
   netif_set_up(netif);
   netif_set_default(netif);
+  netif->mtu = 1500;
 
   return ERR_OK;
 }

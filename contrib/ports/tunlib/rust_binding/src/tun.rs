@@ -26,7 +26,7 @@ extern "C" fn new_connection_callback(
     newpcb: *mut tcp_pcb,
     err: err_t,
 ) -> err_t {
-    println!("New Connection from lwip");
+    println!("New Connection from lwip {:?}", newpcb);
     if err != crate::lwip_binding::err_enum_t_ERR_OK as err_t {
         return err;
     }
@@ -170,7 +170,7 @@ impl TunNetif {
             let pbuf_wrapper = PtrWrapper(pbuf);
             let netif_wrapper = PtrWrapper(self.netif);
 
-            (*self.context).pool.install(|| {
+            (*self.context).pool.spawn(|| {
                 let netif_wrapper = netif_wrapper;
                 let pbuf_wrapper = pbuf_wrapper;
 
