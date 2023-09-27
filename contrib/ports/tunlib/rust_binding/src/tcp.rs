@@ -29,6 +29,7 @@ struct Callback {
     write_waker: Option<Waker>,
     unread: Mutex<Vec<u8>>,
     met_eof: bool,
+    xx: Vec<u8>
 }
 
 struct PBuf {
@@ -76,8 +77,12 @@ extern "C" fn recv_function(
     let pbuf_data = pbuf.data();
 
     {
-        let mut locked = callback.unread.lock().unwrap();
-        locked.extend_from_slice(pbuf_data);
+        let locked = callback.unread.lock();
+        if let Ok(mut locked) = locked {
+            locked.extend_from_slice(pbuf_data);
+        } else {
+            assert!(false, "{}", locked.err().unwrap());
+        }
     }
 
     if let Some(waker) = callback.recv_waker.take() {
@@ -131,6 +136,7 @@ impl TcpConnection {
             write_waker: None,
             unread: Mutex::new(Vec::new()),
             met_eof: false,
+            xx: vec![1]
         };
         let mut pinned = Box::pin(callback);
         let ptr = unsafe { pinned.as_mut().get_unchecked_mut() as *mut Callback };
@@ -173,7 +179,8 @@ impl AsyncRead for TcpConnection {
         // println!("Poll read");
 
         {
-            self.as_mut().callback.recv_waker = Some(cx.waker().clone());
+            let waker = cx.waker().clone();
+            self.as_mut().callback.recv_waker = Some(waker);
         }
 
         let mut locked = self.callback.unread.lock().unwrap();

@@ -13,3 +13,7 @@ tun = { path = "../" }
 
 [build-dependencies]
 cc = { version = "1.0", features = ["parallel"] }
+
+[[bin]]
+name = "linux_tun_example"
+rustflags = ["-C", "panic=abort"]

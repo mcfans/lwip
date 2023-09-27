@@ -29,7 +29,7 @@ impl tun::tun::Pipe for TcpHandler {
             //     println!("Bind failed with error {}", res);
             // }
             // 198.19.249.150
-            socket.bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(198, 19, 249, 150), 0))).unwrap();
+            socket.bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(192, 168, 100, 212), 0))).unwrap();
             let outbound_conn = socket.connect(dst).await;
 
             if let Err(e) = outbound_conn {
@@ -86,7 +86,7 @@ fn main() {
         .unwrap();
 
     let fd = unsafe { tun_open() };
-    let mut file = unsafe { 
+    let mut file = unsafe {
         File::from_raw_fd(fd)
     };
     let ip = Ipv4Addr::new(192, 18, 0, 1);

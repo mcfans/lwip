@@ -38,10 +38,10 @@ int tun_open()
     return fd;
 }
 
-int bind_eth0(int sockfd) 
+int bind_eth0(int sockfd)
 {
     const struct ifreq ifr = {
-        .ifr_name = "eth0",
+        .ifr_name = "enp7s0",
     };
 
     if (setsockopt(sockfd, SOL_SOCKET, SO_BINDTODEVICE, &ifr, sizeof(ifr)) < 0) {
