@@ -1,9 +1,10 @@
 use crate::lwip_binding::{
     err_enum_t_ERR_OK, err_t, pbuf, pbuf_free, tcp_arg, tcp_close, tcp_output, tcp_pcb, tcp_recv,
-    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_BUF, err_enum_t_ERR_USE, err_enum_t_ERR_ALREADY, err_enum_t_ERR_ABRT, err_enum_t_ERR_CLSD, err_enum_t_ERR_RST, err_enum_t_ERR_ARG, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved, tcp_sent, tcp_abort,
+    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_USE, err_enum_t_ERR_ABRT, err_enum_t_ERR_RST, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved, tcp_sent,
 };
 use crate::tun::PtrWrapper;
 use core::task::{Context, Poll};
+use std::env::consts;
 use std::sync::Mutex;
 use rayon::ThreadPool;
 use std::ffi::c_void;
@@ -18,16 +19,16 @@ pub struct TcpConnection {
 
     pool: std::sync::Arc<ThreadPool>,
 
-    callback: Pin<Box<Callback>>,
+    callback: Pin<Box<Mutex<Callback>>>,
 }
 
 unsafe impl Send for TcpConnection {}
 unsafe impl Sync for TcpConnection {}
 
 struct Callback {
-    recv_waker: Mutex<Option<Waker>>,
-    write_waker: Mutex<Option<Waker>>,
-    unread: Mutex<Vec<u8>>,
+    recv_waker: Option<Waker>,
+    write_waker: Option<Waker>,
+    unread: Vec<u8>,
     met_eof: bool,
 }
 
@@ -62,11 +63,11 @@ extern "C" fn recv_function(
     if err != err_enum_t_ERR_OK as err_t {
         return err;
     }
-    let callback = arg as *mut Callback;
-    let callback = unsafe { &mut *callback };
+    let callback = arg as *const Mutex<Callback>;
+    let callback = unsafe { &*callback };
 
     if p.is_null() {
-        callback.met_eof = true;
+        callback.lock().unwrap().met_eof = true;
         unsafe { tcp_recved(pcb, 0) };
         return err_enum_t_ERR_OK as err_t;
     }
@@ -76,15 +77,11 @@ extern "C" fn recv_function(
     let pbuf_data = pbuf.data();
 
     {
-        let locked = callback.unread.lock();
-        if let Ok(mut locked) = locked {
-            locked.extend_from_slice(pbuf_data);
-        } else {
-            assert!(false, "{}", locked.err().unwrap());
-        }
+        let locked = &mut callback.lock().unwrap().unread;
+        locked.extend_from_slice(pbuf_data);
     }
 
-    let mut recv_waker = callback.recv_waker.lock().unwrap();
+    let recv_waker = &mut callback.lock().unwrap().recv_waker;
 
     if let Some(waker) = recv_waker.take() {
         waker.wake();
@@ -100,10 +97,10 @@ extern "C" fn poll_function(
     arg: *mut std::os::raw::c_void,
     _: *mut tcp_pcb,
 ) -> err_t {
-    let callback = arg as *mut Callback;
-    let callback = unsafe { &mut *callback };
+    let callback = arg as *const Mutex<Callback>;
+    let callback = unsafe { &*callback };
 
-    let mut write_waker = callback.write_waker.lock().unwrap();
+    let write_waker = &mut callback.lock().unwrap().write_waker;
 
     if let Some(waker) = write_waker.take() {
         waker.wake();
@@ -120,10 +117,10 @@ extern "C" fn sent_function(
     _: u16
 ) -> err_t {
     // println!("Sent called");
-    let callback = arg as *mut Callback;
-    let callback = unsafe { &mut *callback };
+    let callback = arg as *const Mutex<Callback>;
+    let callback = unsafe { &*callback };
 
-    let mut write_waker = callback.write_waker.lock().unwrap();
+    let write_waker = &mut callback.lock().unwrap().write_waker;
 
     if let Some(waker) = write_waker.take() {
         waker.wake();
@@ -137,13 +134,13 @@ extern "C" fn sent_function(
 impl TcpConnection {
     pub fn new(pcb: *mut tcp_pcb, pool: std::sync::Arc<ThreadPool>) -> TcpConnection {
         let callback = Callback {
-            recv_waker: Mutex::new(None),
-            write_waker: Mutex::new(None),
-            unread: Mutex::new(Vec::new()),
+            recv_waker: None,
+            write_waker: None,
+            unread: Vec::new(),
             met_eof: false,
         };
-        let mut pinned = Box::pin(callback);
-        let ptr = unsafe { pinned.as_mut().get_unchecked_mut() as *mut Callback };
+        let mut pinned = Box::pin(Mutex::new(callback));
+        let ptr = unsafe { pinned.as_mut().get_unchecked_mut() as *mut Mutex<Callback> };
 
         let recv_callback_wrapper = PtrWrapper(ptr);
         let pcb_wrapper = PtrWrapper(pcb);
@@ -185,13 +182,14 @@ impl AsyncRead for TcpConnection {
         {
             let waker = cx.waker().clone();
             let callback = &self.as_mut().callback;
-            callback.recv_waker.lock().unwrap().replace(waker);
+            callback.lock().unwrap().recv_waker.replace(waker);
         }
 
-        let mut locked = self.callback.unread.lock().unwrap();
+        let mut locked_callback = self.callback.lock().unwrap();
+        let locked_unread = &mut locked_callback.unread;
 
-        if locked.is_empty() {
-            if self.callback.met_eof {
+        if locked_unread.is_empty() {
+            if locked_callback.met_eof {
                 return Poll::Ready(Ok(()));
             }
 
@@ -201,22 +199,22 @@ impl AsyncRead for TcpConnection {
             let mut need_call_waker_again = false;
 
             let read_size;
-            if buf.remaining() < locked.len() {
+            if buf.remaining() < locked_unread.len() {
                 read_size = buf.remaining();
                 need_call_waker_again = true;
             } else {
-                read_size = locked.len();
+                read_size = locked_unread.len();
             }
 
             {
-                let sent_data = locked.drain(..read_size);
+                let sent_data = locked_unread.drain(..read_size);
 
                 buf.put_slice(sent_data.as_slice());
 
                 // println!("Read data from tcp tun {} {:?}", read_size, std::time::Instant::now());
             }
 
-            if self.callback.met_eof {
+            if locked_callback.met_eof {
                 need_call_waker_again = true;
             }
 
@@ -235,7 +233,7 @@ impl AsyncWrite for TcpConnection {
         {
             let waker = cx.waker().clone();
             let callback = &self.as_mut().callback;
-            callback.write_waker.lock().unwrap().replace(waker);
+            callback.lock().unwrap().write_waker.replace(waker);
         }
 
         let pool = &self.pool;

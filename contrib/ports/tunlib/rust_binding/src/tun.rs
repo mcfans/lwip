@@ -9,6 +9,7 @@ use std::os::raw::c_void;
 pub struct TunNetif {
     netif: *mut netif,
     context: *const NetIfContext,
+    pub output_fn_set: bool
 }
 
 struct NetIfContext {
@@ -158,6 +159,7 @@ impl TunNetif {
             TunNetif {
                 netif: ptr_to_netif.0,
                 context: addr,
+                output_fn_set: false
             }
         }
     }
@@ -180,6 +182,7 @@ impl TunNetif {
     }
 
     pub fn set_output_fn(&mut self, output: Box<dyn Fn(&[u8]) -> ()>) {
+        self.output_fn_set = true;
         unsafe {
             (self.context as *mut NetIfContext).as_mut().unwrap().output = Some(output);
         }
