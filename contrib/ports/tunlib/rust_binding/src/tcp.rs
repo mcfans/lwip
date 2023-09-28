@@ -25,11 +25,10 @@ unsafe impl Send for TcpConnection {}
 unsafe impl Sync for TcpConnection {}
 
 struct Callback {
-    recv_waker: Option<Waker>,
-    write_waker: Option<Waker>,
+    recv_waker: Mutex<Option<Waker>>,
+    write_waker: Mutex<Option<Waker>>,
     unread: Mutex<Vec<u8>>,
     met_eof: bool,
-    xx: Vec<u8>
 }
 
 struct PBuf {
@@ -85,7 +84,9 @@ extern "C" fn recv_function(
         }
     }
 
-    if let Some(waker) = callback.recv_waker.take() {
+    let mut recv_waker = callback.recv_waker.lock().unwrap();
+
+    if let Some(waker) = recv_waker.take() {
         waker.wake();
     } else {
         // println!("Not waking");
@@ -102,7 +103,9 @@ extern "C" fn poll_function(
     let callback = arg as *mut Callback;
     let callback = unsafe { &mut *callback };
 
-    if let Some(waker) = callback.write_waker.take() {
+    let mut write_waker = callback.write_waker.lock().unwrap();
+
+    if let Some(waker) = write_waker.take() {
         waker.wake();
     } else {
         // println!("Polling without waker");
@@ -120,7 +123,9 @@ extern "C" fn sent_function(
     let callback = arg as *mut Callback;
     let callback = unsafe { &mut *callback };
 
-    if let Some(waker) = callback.write_waker.take() {
+    let mut write_waker = callback.write_waker.lock().unwrap();
+
+    if let Some(waker) = write_waker.take() {
         waker.wake();
     } else {
         // println!("Calling Sent without waker");
@@ -132,11 +137,10 @@ extern "C" fn sent_function(
 impl TcpConnection {
     pub fn new(pcb: *mut tcp_pcb, pool: std::sync::Arc<ThreadPool>) -> TcpConnection {
         let callback = Callback {
-            recv_waker: None,
-            write_waker: None,
+            recv_waker: Mutex::new(None),
+            write_waker: Mutex::new(None),
             unread: Mutex::new(Vec::new()),
             met_eof: false,
-            xx: vec![1]
         };
         let mut pinned = Box::pin(callback);
         let ptr = unsafe { pinned.as_mut().get_unchecked_mut() as *mut Callback };
@@ -180,7 +184,8 @@ impl AsyncRead for TcpConnection {
 
         {
             let waker = cx.waker().clone();
-            self.as_mut().callback.recv_waker = Some(waker);
+            let callback = &self.as_mut().callback;
+            callback.recv_waker.lock().unwrap().replace(waker);
         }
 
         let mut locked = self.callback.unread.lock().unwrap();
@@ -227,7 +232,11 @@ impl AsyncWrite for TcpConnection {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
         // println!("Poll write len {}", buf.len());
         let pcb_wrapper = PtrWrapper(self.pcb);
-        self.as_mut().callback.write_waker = Some(cx.waker().clone());
+        {
+            let waker = cx.waker().clone();
+            let callback = &self.as_mut().callback;
+            callback.write_waker.lock().unwrap().replace(waker);
+        }
 
         let pool = &self.pool;
 
