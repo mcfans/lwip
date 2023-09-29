@@ -8,9 +8,9 @@
 #define MEMP_NUM_PBUF                   131072
 #define MEMP_NUM_TCP_PCB                2048
 #define MEMP_NUM_TCP_PCB_LISTEN         2048
-//#define MEMP_OVERFLOW_CHECK             2
-//#define MEM_SANITY_CHECK                1
-//#define MEMP_SANITY_CHECK               1
+// #define MEMP_OVERFLOW_CHECK             1
+// #define MEM_SANITY_CHECK                1
+// #define MEMP_SANITY_CHECK               1
 #define LWIP_IPV4                       1
 
 // #define TCP_DEBUG                  LWIP_DBG_ON

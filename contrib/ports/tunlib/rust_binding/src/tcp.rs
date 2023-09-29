@@ -320,6 +320,8 @@ impl Drop for TcpConnection {
 
             let pcb_wrapper = PtrWrapper(self.pcb);
 
+            let called_tcp_close_before = self.pcb_closed;
+
             self.pool.install(|| {
                 let pcb_wrapper = pcb_wrapper;
 
@@ -330,7 +332,9 @@ impl Drop for TcpConnection {
                         return;
                     }
                     _ => {
-                        tcp_close(pcb_wrapper.0);
+                        if !called_tcp_close_before {
+                            tcp_close(pcb_wrapper.0);
+                        }
                         return;
                     }
                 }

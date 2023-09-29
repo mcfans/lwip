@@ -166,17 +166,15 @@ impl TunNetif {
 
     pub fn input_data(&self, data: &[u8]) {
         unsafe {
-            let pbuf = pbuf_alloc(pbuf_layer_PBUF_RAW, data.len() as u16, pbuf_type_PBUF_POOL);
-            pbuf_take(pbuf, data.as_ptr() as *const c_void, data.len() as u16);
-
-            let pbuf_wrapper = PtrWrapper(pbuf);
             let netif_wrapper = PtrWrapper(self.netif);
-
             (*self.context).pool.install(|| {
                 let netif_wrapper = netif_wrapper;
-                let pbuf_wrapper = pbuf_wrapper;
+                let netif = netif_wrapper.0;
 
-                netif_input(pbuf_wrapper.0, netif_wrapper.0);
+                let pbuf = pbuf_alloc(pbuf_layer_PBUF_RAW, data.len() as u16, pbuf_type_PBUF_POOL);
+                pbuf_take(pbuf, data.as_ptr() as *const c_void, data.len() as u16);
+
+                netif_input(pbuf, netif);
             });
         }
     }
