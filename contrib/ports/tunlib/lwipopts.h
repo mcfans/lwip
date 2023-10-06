@@ -23,8 +23,8 @@
 // #define TCP_QLEN_DEBUG             LWIP_DBG_ON
 // #define TCP_RST_DEBUG              LWIP_DBG_ON
 
-#define TCP_XX_DEBUG               LWIP_DBG_ON
 
+#define TCP_LISTEN_BACKLOG              1
 #define LWIP_DBG_MIN_LEVEL              LWIP_DBG_LEVEL_ALL
 
 #define TCP_MSS         1460

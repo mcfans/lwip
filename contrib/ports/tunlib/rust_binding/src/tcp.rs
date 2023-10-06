@@ -1,11 +1,13 @@
 use crate::lwip_binding::{
     err_enum_t_ERR_OK, err_t, pbuf, pbuf_free, tcp_arg, tcp_close, tcp_output, tcp_pcb, tcp_recv,
-    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_USE, err_enum_t_ERR_ABRT, err_enum_t_ERR_RST, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved, tcp_sent,
+    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_USE, err_enum_t_ERR_ABRT, err_enum_t_ERR_RST, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved, tcp_sent, tcp_state, tcp_state_FIN_WAIT_1, tcp_state_FIN_WAIT_2, tcp_abort, tcp_err,
 };
 use crate::tun::PtrWrapper;
 use core::task::{Context, Poll};
 use std::env::consts;
+use std::process::abort;
 use std::sync::Mutex;
+use log::debug;
 use rayon::ThreadPool;
 use std::ffi::c_void;
 use std::pin::Pin;
@@ -30,6 +32,7 @@ struct Callback {
     write_waker: Option<Waker>,
     unread: Vec<u8>,
     met_eof: bool,
+    reset_by_peer: bool,
 }
 
 struct PBuf {
@@ -53,6 +56,8 @@ impl Drop for PBuf {
     }
 }
 
+const SINGLE_CONNECTION_BUFFER_SIZE: usize = 1024 * 8 * 8;
+
 extern "C" fn recv_function(
     arg: *mut std::os::raw::c_void,
     pcb: *mut tcp_pcb,
@@ -72,24 +77,32 @@ extern "C" fn recv_function(
         return err_enum_t_ERR_OK as err_t;
     }
 
+
     let pbuf = PBuf { pbuf: p };
 
     let pbuf_data = pbuf.data();
 
     {
         let locked = &mut callback.lock().unwrap().unread;
+
+        if locked.capacity() - locked.len() < pbuf_data.len() {
+            std::mem::forget(pbuf);
+            return err_enum_t_ERR_MEM as err_t;
+        }
+
         locked.extend_from_slice(pbuf_data);
     }
 
     let recv_waker = &mut callback.lock().unwrap().recv_waker;
 
+    unsafe { tcp_recved(pcb, pbuf_data.len() as u16) };
+
     if let Some(waker) = recv_waker.take() {
         waker.wake();
     } else {
-        // println!("Not waking");
+        // println!("Calling Recv without waker");
     }
 
-    unsafe { tcp_recved(pcb, pbuf_data.len() as u16) };
     return err_enum_t_ERR_OK as err_t;
 }
 
@@ -109,6 +122,16 @@ extern "C" fn poll_function(
     }
 
     return err_enum_t_ERR_OK as err_t;
+}
+
+extern "C" fn err_function(
+    arg: *mut std::os::raw::c_void,
+    _: err_t
+) {
+    let callback = arg as *const Mutex<Callback>;
+    let callback = unsafe { &*callback };
+
+    callback.lock().unwrap().reset_by_peer = true;
 }
 
 extern "C" fn sent_function(
@@ -133,11 +156,13 @@ extern "C" fn sent_function(
 
 impl TcpConnection {
     pub fn new(pcb: *mut tcp_pcb, pool: std::sync::Arc<ThreadPool>) -> TcpConnection {
+        unsafe { assert!((*pcb).state != tcp_state_CLOSED) };
         let callback = Callback {
             recv_waker: None,
             write_waker: None,
-            unread: Vec::new(),
+            unread: Vec::with_capacity(SINGLE_CONNECTION_BUFFER_SIZE),
             met_eof: false,
+            reset_by_peer: false,
         };
         let mut pinned = Box::pin(Mutex::new(callback));
         let ptr = unsafe { pinned.as_mut().get_unchecked_mut() as *mut Mutex<Callback> };
@@ -158,7 +183,8 @@ impl TcpConnection {
                 tcp_poll(pcb, Some(poll_function), 1);
                 tcp_sent(pcb, Some(sent_function));
 
-                tcp_recv(pcb, Some(recv_function))
+                tcp_recv(pcb, Some(recv_function));
+                tcp_err(pcb, Some(err_function));
             }
         });
 
@@ -177,8 +203,6 @@ impl AsyncRead for TcpConnection {
         cx: &mut Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        // println!("Poll read");
-
         {
             let waker = cx.waker().clone();
             let callback = &self.as_mut().callback;
@@ -228,7 +252,8 @@ impl AsyncRead for TcpConnection {
 
 impl AsyncWrite for TcpConnection {
     fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize>> {
-        // println!("Poll write len {}", buf.len());
+        // debug!("Poll write len {}", buf.len());
+
         let pcb_wrapper = PtrWrapper(self.pcb);
         {
             let waker = cx.waker().clone();
@@ -240,6 +265,13 @@ impl AsyncWrite for TcpConnection {
 
         let result = pool.install(|| unsafe {
             let pcb_wrapper = pcb_wrapper;
+            let err = match_tcp_state_to_io_error_kind((*pcb_wrapper.0).state);
+            if let Some(err) = err {
+                // if err == std::io::ErrorKind::ConnectionAborted {
+                //     return Poll::Ready(Ok(0));
+                // }
+                return Poll::Ready(Err(std::io::Error::new(err, "tcp state is not connected")));
+            }
 
             let err_t = tcp_write(
                 pcb_wrapper.0,
@@ -247,7 +279,7 @@ impl AsyncWrite for TcpConnection {
                 buf.len() as u16,
                 TCP_WRITE_FLAG_COPY as u8,
             );
-            println!("tcp write result {}", err_t);
+            // println!("tcp write result {}", err_t);
 
             if err_t == err_enum_t_ERR_MEM as err_t {
                 // data is not writen.
@@ -289,19 +321,34 @@ impl AsyncWrite for TcpConnection {
         }
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Result<()>> {
         let pcb_wrapper = PtrWrapper(self.pcb);
+        debug!("PCB shutdown");
+
+        unsafe {
+            if (*pcb_wrapper.0).state == tcp_state_CLOSED {
+                return Poll::Ready(Ok(()));
+            }
+        }
 
         let pool = &self.pool;
+
+        let reset_by_peer = {
+            self.callback.lock().unwrap().reset_by_peer
+        };
+
+        if reset_by_peer {
+            return Poll::Ready(Ok(()));
+        }
 
         let err_t = pool.install(|| unsafe {
             let pcb_wrapper = pcb_wrapper;
 
-            tcp_close(pcb_wrapper.0)
+            close_tcp_in_shutdown(pcb_wrapper.0)
         });
 
+        self.as_mut().pcb_closed = true;
         if err_t == err_enum_t_ERR_OK as err_t {
-            self.get_mut().pcb_closed = true;
             Poll::Ready(Ok(()))
         } else {
             let err_kind = match_error_to_rust_error_kind(err_t);
@@ -313,33 +360,39 @@ impl AsyncWrite for TcpConnection {
     }
 }
 
+unsafe fn close_tcp_in_shutdown(pcb: *mut tcp_pcb) -> i8 {
+    tcp_close(pcb)
+}
+
 impl Drop for TcpConnection {
     fn drop(&mut self) {
+        let reset_by_peer = {
+            self.callback.lock().unwrap().reset_by_peer
+        };
+
+        let closed = self.pcb_closed || reset_by_peer;
         unsafe {
-            println!("tcp drop");
-
             let pcb_wrapper = PtrWrapper(self.pcb);
-
-            let called_tcp_close_before = self.pcb_closed;
 
             self.pool.install(|| {
                 let pcb_wrapper = pcb_wrapper;
 
-                let state = (*pcb_wrapper.0).state;
-
-                match state {
-                    tcp_state_CLOSED | tcp_state_CLOSE_WAIT | tcp_state_CLOSING => {
-                        return;
-                    }
-                    _ => {
-                        if !called_tcp_close_before {
-                            tcp_close(pcb_wrapper.0);
-                        }
-                        return;
-                    }
+                if !closed {
+                    tcp_abort(pcb_wrapper.0);
                 }
             });
         }
+    }
+}
+
+fn match_tcp_state_to_io_error_kind(state: tcp_state) -> Option<std::io::ErrorKind> {
+    match state {
+        tcp_state_CLOSED => Some(std::io::ErrorKind::ConnectionAborted),
+        tcp_state_CLOSE_WAIT => Some(std::io::ErrorKind::ConnectionAborted),
+        tcp_state_CLOSING => Some(std::io::ErrorKind::ConnectionAborted),
+        tcp_state_FIN_WAIT_1 => Some(std::io::ErrorKind::ConnectionAborted),
+        tcp_state_FIN_WAIT_2 => Some(std::io::ErrorKind::ConnectionAborted),
+        _ => None
     }
 }
 
