@@ -1,11 +1,9 @@
 use crate::lwip_binding::{
     err_enum_t_ERR_OK, err_t, pbuf, pbuf_free, tcp_arg, tcp_close, tcp_output, tcp_pcb, tcp_recv,
-    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_USE, err_enum_t_ERR_ABRT, err_enum_t_ERR_RST, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved, tcp_sent, tcp_state, tcp_state_FIN_WAIT_1, tcp_state_FIN_WAIT_2, tcp_abort, tcp_err,
+    tcp_write, TCP_WRITE_FLAG_COPY, err_enum_t_ERR_MEM, tcp_poll, err_enum_t_ERR_CONN, err_enum_t_ERR_USE, err_enum_t_ERR_ABRT, err_enum_t_ERR_RST, tcp_state_CLOSED, tcp_state_CLOSE_WAIT, tcp_state_CLOSING, tcp_recved, tcp_sent, tcp_state, tcp_state_FIN_WAIT_1, tcp_state_FIN_WAIT_2, tcp_abort, tcp_err, tcp_state_TIME_WAIT, tcp_state_LISTEN, tcp_state_SYN_SENT,
 };
 use crate::tun::PtrWrapper;
 use core::task::{Context, Poll};
-use std::env::consts;
-use std::process::abort;
 use std::sync::Mutex;
 use log::debug;
 use rayon::ThreadPool;
@@ -17,7 +15,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub struct TcpConnection {
     pcb: *mut tcp_pcb,
 
-    pcb_closed: bool,
+    pcb_freed: bool,
 
     pool: std::sync::Arc<ThreadPool>,
 
@@ -64,7 +62,6 @@ extern "C" fn recv_function(
     p: *mut pbuf,
     err: err_t,
 ) -> err_t {
-    // println!("Recv called time {:?}", std::time::Instant::now());
     if err != err_enum_t_ERR_OK as err_t {
         return err;
     }
@@ -191,7 +188,7 @@ impl TcpConnection {
         TcpConnection {
             pcb,
             pool,
-            pcb_closed: false,
+            pcb_freed: false,
             callback: pinned,
         }
     }
@@ -234,8 +231,6 @@ impl AsyncRead for TcpConnection {
                 let sent_data = locked_unread.drain(..read_size);
 
                 buf.put_slice(sent_data.as_slice());
-
-                // println!("Read data from tcp tun {} {:?}", read_size, std::time::Instant::now());
             }
 
             if locked_callback.met_eof {
@@ -265,12 +260,14 @@ impl AsyncWrite for TcpConnection {
 
         let result = pool.install(|| unsafe {
             let pcb_wrapper = pcb_wrapper;
-            let err = match_tcp_state_to_io_error_kind((*pcb_wrapper.0).state);
+            let state = (*pcb_wrapper.0).state;
+            let err = match_tcp_state_to_io_error_kind(state);
             if let Some(err) = err {
                 // if err == std::io::ErrorKind::ConnectionAborted {
                 //     return Poll::Ready(Ok(0));
                 // }
-                return Poll::Ready(Err(std::io::Error::new(err, "tcp state is not connected")));
+                let error_msg = format!("tcp state is not connected {}", state);
+                return Poll::Ready(Err(std::io::Error::new(err, error_msg)));
             }
 
             let err_t = tcp_write(
@@ -341,13 +338,26 @@ impl AsyncWrite for TcpConnection {
             return Poll::Ready(Ok(()));
         }
 
+        let state_that_free_pcb = [tcp_state_CLOSED, tcp_state_SYN_SENT, tcp_state_LISTEN];
+
+        let pcb_would_be_free = {
+            if state_that_free_pcb.contains(&unsafe { (*pcb_wrapper.0).state }) {
+                true
+            } else {
+                false
+            }
+        };
+
         let err_t = pool.install(|| unsafe {
             let pcb_wrapper = pcb_wrapper;
 
             close_tcp_in_shutdown(pcb_wrapper.0)
         });
 
-        self.as_mut().pcb_closed = true;
+        if pcb_would_be_free {
+            self.as_mut().pcb_freed = true;
+        }
+
         if err_t == err_enum_t_ERR_OK as err_t {
             Poll::Ready(Ok(()))
         } else {
@@ -370,7 +380,7 @@ impl Drop for TcpConnection {
             self.callback.lock().unwrap().reset_by_peer
         };
 
-        let closed = self.pcb_closed || reset_by_peer;
+        let closed = self.pcb_freed || reset_by_peer;
         unsafe {
             let pcb_wrapper = PtrWrapper(self.pcb);
 
